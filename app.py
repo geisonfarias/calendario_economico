@@ -1,6 +1,5 @@
 from flask import Flask, jsonify, request
 import requests
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import pytz
 
@@ -8,7 +7,8 @@ app = Flask(__name__)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept-Language": "pt-BR,pt;q=0.9"
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://br.investing.com/economic-calendar/",
 }
 
 @app.route("/")
@@ -20,41 +20,44 @@ def calendario():
     impacto_min = int(request.args.get("impacto", 1))
 
     tz_br = pytz.timezone("America/Sao_Paulo")
-    hoje = datetime.now(tz_br).date()
+    hoje = datetime.now(tz_br)
     fim = hoje + timedelta(days=7)
 
-    url = "https://br.investing.com/economic-calendar/"
-    r = requests.get(url, headers=HEADERS)
-    soup = BeautifulSoup(r.text, "html.parser")
+    url = "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData"
+
+    payload = {
+        "dateFrom": hoje.strftime("%Y-%m-%d"),
+        "dateTo": fim.strftime("%Y-%m-%d"),
+        "timeZone": "55",      # Brasil
+        "timeFilter": "timeRemain",
+        "currentTab": "custom",
+        "limit_from": 0
+    }
+
+    r = requests.post(url, data=payload, headers=HEADERS, timeout=15)
+    data = r.json()
 
     eventos = []
 
-    linhas = soup.select("tr.js-event-item")
-
-    for l in linhas:
-        try:
-            data_str = l.get("data-event-datetime")
-            if not data_str:
-                continue
-
-            data_evento = datetime.fromisoformat(data_str.replace("Z", "+00:00")).astimezone(tz_br)
-
-            if not (hoje <= data_evento.date() <= fim):
-                continue
-
-            estrelas = len(l.select(".grayFullBullishIcon"))
-            if estrelas < impacto_min:
-                continue
-
-            eventos.append({
-                "data": data_evento.strftime("%Y-%m-%d %H:%M"),
-                "pais": l.get("data-country"),
-                "evento": l.select_one(".event").get_text(strip=True),
-                "impacto": estrelas
-            })
-
-        except:
+    for e in data.get("data", []):
+        impacto = e.get("importance", 0)
+        if impacto < impacto_min:
             continue
+
+        data_evento = datetime.fromtimestamp(
+            int(e["timestamp"]),
+            tz=pytz.utc
+        ).astimezone(tz_br)
+
+        eventos.append({
+            "data": data_evento.strftime("%Y-%m-%d %H:%M"),
+            "pais": e.get("country"),
+            "evento": e.get("event"),
+            "impacto": impacto,
+            "atual": e.get("actual"),
+            "previsto": e.get("forecast"),
+            "anterior": e.get("previous")
+        })
 
     return jsonify(eventos)
 
