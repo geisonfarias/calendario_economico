@@ -1,35 +1,45 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
+import requests
 from datetime import datetime, timedelta
 import pytz
 
 app = Flask(__name__)
 
-TZ_BR = pytz.timezone("America/Sao_Paulo")
-
 @app.route("/")
 def home():
-    return "API Calendário Econômico OK"
+    return "API Calendário Econômico rodando 🚀"
 
 @app.route("/calendario")
 def calendario():
-    impacto_min = int(request.args.get("impacto", 1))
-    dias = int(request.args.get("dias", 7))
+    tz_br = pytz.timezone("America/Sao_Paulo")
 
-    hoje = datetime.now(TZ_BR).date()
+    hoje = datetime.now(tz_br).date()
+    fim = hoje + timedelta(days=7)
 
-    eventos = []
-    for i in range(dias + 1):
-        dia = hoje + timedelta(days=i)
-        eventos.append({
-            "data": dia.strftime("%Y-%m-%d"),
-            "hora": "09:00",
-            "moeda": "USD",
-            "evento": f"Evento teste dia {i}",
-            "impacto": impacto_min
-        })
+    url = f"https://api.tradingeconomics.com/calendar/country/all/{hoje}/{fim}?c=guest:guest"
 
-    return jsonify(eventos)
+    try:
+        r = requests.get(url, timeout=10)
+        dados = r.json()
+
+        eventos = []
+        for e in dados:
+            impacto = e.get("Importance", 0)
+            if impacto >= 1:  # impacto mínimo
+                eventos.append({
+                    "data": e.get("Date"),
+                    "pais": e.get("Country"),
+                    "evento": e.get("Event"),
+                    "impacto": impacto,
+                    "atual": e.get("Actual"),
+                    "previsto": e.get("Forecast"),
+                    "anterior": e.get("Previous")
+                })
+
+        return jsonify(eventos)
+
+    except Exception as erro:
+        return jsonify({"erro": str(erro)})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-
