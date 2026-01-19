@@ -1,86 +1,62 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import requests
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import pytz
 
 app = Flask(__name__)
 
-# =========================
-# CONFIGURAÇÕES DE CACHE
-# =========================
-CACHE_DATA = None
-CACHE_TIME = None
-CACHE_TTL = 600  # 10 minutos (em segundos)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "pt-BR,pt;q=0.9"
+}
 
-# =========================
-# ROTA HOME (TESTE)
-# =========================
 @app.route("/")
 def home():
     return "API Calendário Econômico rodando 🚀"
 
-# =========================
-# FUNÇÃO QUE BUSCA DADOS
-# (com cache)
-# =========================
-def buscar_calendario():
-    global CACHE_DATA, CACHE_TIME
-
-    agora = datetime.utcnow()
-
-    # Se cache ainda é válido
-    if CACHE_DATA and CACHE_TIME and (agora - CACHE_TIME).seconds < CACHE_TTL:
-        print("⚡ Usando cache")
-        return CACHE_DATA
-
-    print("🌐 Buscando dados externos...")
+@app.route("/calendario")
+def calendario():
+    impacto_min = int(request.args.get("impacto", 1))
 
     tz_br = pytz.timezone("America/Sao_Paulo")
     hoje = datetime.now(tz_br).date()
     fim = hoje + timedelta(days=7)
 
-    url = f"https://api.tradingeconomics.com/calendar/country/all/{hoje}/{fim}?c=guest:guest"
-
-    r = requests.get(url, timeout=15)
-    dados = r.json()
+    url = "https://br.investing.com/economic-calendar/"
+    r = requests.get(url, headers=HEADERS)
+    soup = BeautifulSoup(r.text, "html.parser")
 
     eventos = []
 
-    for e in dados:
-        impacto = e.get("Importance", 0)
+    linhas = soup.select("tr.js-event-item")
 
-        # impacto mínimo = 1
-        if impacto >= 1:
+    for l in linhas:
+        try:
+            data_str = l.get("data-event-datetime")
+            if not data_str:
+                continue
+
+            data_evento = datetime.fromisoformat(data_str.replace("Z", "+00:00")).astimezone(tz_br)
+
+            if not (hoje <= data_evento.date() <= fim):
+                continue
+
+            estrelas = len(l.select(".grayFullBullishIcon"))
+            if estrelas < impacto_min:
+                continue
+
             eventos.append({
-                "data": e.get("Date"),
-                "pais": e.get("Country"),
-                "evento": e.get("Event"),
-                "impacto": impacto,
-                "atual": e.get("Actual", ""),
-                "previsto": e.get("Forecast", ""),
-                "anterior": e.get("Previous", "")
+                "data": data_evento.strftime("%Y-%m-%d %H:%M"),
+                "pais": l.get("data-country"),
+                "evento": l.select_one(".event").get_text(strip=True),
+                "impacto": estrelas
             })
 
-    # Atualiza cache
-    CACHE_DATA = eventos
-    CACHE_TIME = agora
+        except:
+            continue
 
-    return eventos
+    return jsonify(eventos)
 
-# =========================
-# ROTA DO CALENDÁRIO
-# =========================
-@app.route("/calendario")
-def calendario():
-    try:
-        dados = buscar_calendario()
-        return jsonify(dados)
-
-    except Exception as erro:
-        return jsonify({"erro": str(erro)})
-
-# =========================
-# START
-# =========================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
