@@ -1,63 +1,66 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 import requests
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import pytz
 
 app = Flask(__name__)
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "X-Requested-With": "XMLHttpRequest",
-    "Referer": "https://br.investing.com/economic-calendar/",
+    "User-Agent": "Mozilla/5.0"
 }
 
 @app.route("/")
 def home():
-    return "API Calendário Econômico rodando 🚀"
+    return "API Calendário Econômico MQL5 rodando 🚀"
 
 @app.route("/calendario")
 def calendario():
-    impacto_min = int(request.args.get("impacto", 1))
+    url = "https://www.mql5.com/pt/economic-calendar"
+
+    r = requests.get(url, headers=HEADERS, timeout=15)
+    soup = BeautifulSoup(r.text, "html.parser")
 
     tz_br = pytz.timezone("America/Sao_Paulo")
-    hoje = datetime.now(tz_br)
+    hoje = datetime.now(tz_br).date()
     fim = hoje + timedelta(days=7)
-
-    url = "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData"
-
-    payload = {
-        "dateFrom": hoje.strftime("%Y-%m-%d"),
-        "dateTo": fim.strftime("%Y-%m-%d"),
-        "timeZone": "55",      # Brasil
-        "timeFilter": "timeRemain",
-        "currentTab": "custom",
-        "limit_from": 0
-    }
-
-    r = requests.post(url, data=payload, headers=HEADERS, timeout=15)
-    data = r.json()
 
     eventos = []
 
-    for e in data.get("data", []):
-        impacto = e.get("importance", 0)
-        if impacto < impacto_min:
+    linhas = soup.select("div.ec-event")
+
+    for l in linhas:
+        try:
+            data_str = l.get("data-time")
+            if not data_str:
+                continue
+
+            # timestamp vem em segundos
+            data_evento = datetime.fromtimestamp(
+                int(data_str), tz=pytz.utc
+            ).astimezone(tz_br)
+
+            if not (hoje <= data_evento.date() <= fim):
+                continue
+
+            impacto = l.select_one(".ec-importance")
+            impacto_txt = impacto.get_text(strip=True) if impacto else ""
+
+            impacto_n = (
+                3 if "Alto" in impacto_txt else
+                2 if "Médio" in impacto_txt else
+                1
+            )
+
+            eventos.append({
+                "data": data_evento.strftime("%Y-%m-%d %H:%M"),
+                "pais": l.select_one(".ec-country").get_text(strip=True),
+                "evento": l.select_one(".ec-event-name").get_text(strip=True),
+                "impacto": impacto_n
+            })
+
+        except:
             continue
-
-        data_evento = datetime.fromtimestamp(
-            int(e["timestamp"]),
-            tz=pytz.utc
-        ).astimezone(tz_br)
-
-        eventos.append({
-            "data": data_evento.strftime("%Y-%m-%d %H:%M"),
-            "pais": e.get("country"),
-            "evento": e.get("event"),
-            "impacto": impacto,
-            "atual": e.get("actual"),
-            "previsto": e.get("forecast"),
-            "anterior": e.get("previous")
-        })
 
     return jsonify(eventos)
 
